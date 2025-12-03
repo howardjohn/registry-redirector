@@ -180,9 +180,9 @@ function trackImagePull(
 	try {
 		const userAgent = request.headers.get('User-Agent') || 'unknown';
 		// Get client IP from CF properties or use 'unknown'
-		const ip: string = (cf && 'clientAddress' in cf && typeof cf.clientAddress === 'string') 
-			? cf.clientAddress 
-			: 'unknown';
+		const ip: string = request.headers.get('cf-connecting-ip') || 'unknown';
+		const region = cf?.region || 'unknown';
+		const country = cf?.country || 'unknown';
 		const timestamp = Date.now();
 
 		// Write data point to Analytics Engine
@@ -196,6 +196,8 @@ function trackImagePull(
 				imageInfo.type,
 				userAgent,
 				ip,
+				region,
+				country,
 			],
 			doubles: [timestamp],
 			indexes: [imageInfo.image],
