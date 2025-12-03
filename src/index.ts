@@ -1,7 +1,7 @@
 /**
  * OCI Image Registry Redirector
  * 
- * Redirects/proxies Docker/OCI registry requests to a target registry (default: GHCR).
+ * Redirects/proxies Docker/OCI registry requests to a target registry.
  * Complies with OCI Distribution Specification.
  * 
  * Supported endpoints:
@@ -13,11 +13,8 @@
  */
 
 interface Env {
-	TARGET_REGISTRY?: string;
+	TARGET_REGISTRY: string;
 }
-
-// Default target registry (GHCR)
-const DEFAULT_TARGET_REGISTRY = 'ghcr.io';
 
 /**
  * Parse WWW-Authenticate header
@@ -82,10 +79,18 @@ async function fetchToken(
 
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+		// Validate required configuration
+		if (!env.TARGET_REGISTRY) {
+			return new Response(
+				JSON.stringify({ error: 'TARGET_REGISTRY environment variable is required' }),
+				{ status: 500, headers: { 'Content-Type': 'application/json' } }
+			);
+		}
+
 		const url = new URL(request.url);
 		const method = request.method;
 		const pathname = url.pathname;
-		const targetRegistry = env.TARGET_REGISTRY || DEFAULT_TARGET_REGISTRY;
+		const targetRegistry = env.TARGET_REGISTRY;
 		const authorization = request.headers.get('Authorization');
 
 		// Redirect root to /v2/

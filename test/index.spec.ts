@@ -102,6 +102,20 @@ describe('OCI Registry Redirector', () => {
 		expect(location).toBe(`https://registry.example.com/v2/myorg/myimage/blobs/${digest}`);
 	});
 
+	it('returns 500 error when TARGET_REGISTRY is missing', async () => {
+		const envWithoutRegistry = { ...env };
+		delete (envWithoutRegistry as any).TARGET_REGISTRY;
+		const request = new IncomingRequest('https://example.com/v2/');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, envWithoutRegistry as typeof env, ctx);
+		await waitOnExecutionContext(ctx);
+		
+		expect(response.status).toBe(500);
+		const body = await response.json();
+		expect(body).toHaveProperty('error');
+		expect(body.error).toContain('TARGET_REGISTRY');
+	});
+
 	it('returns 404 for unknown endpoints', async () => {
 		const request = new IncomingRequest('https://example.com/v2/unknown/endpoint');
 		const ctx = createExecutionContext();
