@@ -198,7 +198,7 @@ function trackImagePull(
 				ip,
 			],
 			doubles: [timestamp],
-			indexes: [imageInfo.image, imageInfo.type],
+			indexes: [imageInfo.image],
 		};
 		console.log("data", data);
 		analytics.writeDataPoint(data);
