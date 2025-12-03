@@ -7,7 +7,7 @@
  * Supported endpoints:
  * - GET /v2/ - API version check
  * - GET /v2/<name>/manifests/<reference> - Manifest requests (proxied to handle auth)
- * - GET /v2/<name>/blobs/<digest> - Blob requests (redirected, not proxied)
+ * - GET /v2/<name>/blobs/<digest> - Blob requests (proxied when auth present, redirected otherwise)
  * - GET /v2/<name>/tags/list - Tags list (proxied to handle auth)
  * - GET /v2/auth - Token endpoint for authentication (proxied to target registry)
  */
@@ -70,14 +70,15 @@ async function fetchToken(
 	if (scope) {
 		url.searchParams.set('scope', scope);
 	}
-	
+
 	const headers = new Headers();
 	if (authorization) {
 		headers.set('Authorization', authorization);
 	}
-	
+
 	return await fetch(url.toString(), { method: 'GET', headers: headers });
 }
+
 
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -86,12 +87,12 @@ export default {
 		const pathname = url.pathname;
 		const targetRegistry = env.TARGET_REGISTRY || DEFAULT_TARGET_REGISTRY;
 		const authorization = request.headers.get('Authorization');
-		
+
 		// Redirect root to /v2/
 		if (pathname === '/') {
 			return Response.redirect(url.protocol + '//' + url.host + '/v2/', 301);
 		}
-		
+
 		// Handle API version check: /v2/
 		if (pathname === '/v2/' || pathname === '/v2') {
 			const upstreamUrl = `https://${targetRegistry}/v2/`;
@@ -99,21 +100,21 @@ export default {
 			if (authorization) {
 				headers.set('Authorization', authorization);
 			}
-			
+
 			const resp = await fetch(upstreamUrl, {
 				method: 'GET',
 				headers: headers,
 				redirect: 'follow',
 			});
-			
+
 			// If upstream requires auth, return 401 with our auth endpoint
 			if (resp.status === 401) {
 				return responseUnauthorized(url);
 			}
-			
+
 			return resp;
 		}
-		
+
 		// Handle token endpoint: /v2/auth
 		if (pathname === '/v2/auth') {
 			// First check if upstream requires auth
@@ -122,52 +123,44 @@ export default {
 				method: 'GET',
 				redirect: 'follow',
 			});
-			
+
 			if (resp.status !== 401) {
 				return resp;
 			}
-			
+
 			const authenticateStr = resp.headers.get('WWW-Authenticate');
 			if (authenticateStr === null) {
 				return resp;
 			}
-			
+
 			const wwwAuthenticate = parseAuthenticate(authenticateStr);
 			const scope = url.searchParams.get('scope');
-			
+
 			return await fetchToken(wwwAuthenticate, scope, authorization);
 		}
-		
-		// Handle blob requests: redirect (not proxy)
-		const blobMatch = pathname.match(/^\/v2\/(.+)\/blobs\/(.+)$/);
-		if (blobMatch) {
-			const redirectUrl = `https://${targetRegistry}${pathname}${url.search}`;
-			return Response.redirect(redirectUrl, 307);
-		}
-		
-		// Handle manifest and tags requests: proxy (to handle auth)
-		const manifestMatch = pathname.match(/^\/v2\/(.+)\/manifests\/(.+)$/);
-		const tagsMatch = pathname.match(/^\/v2\/(.+)\/tags\/list$/);
-		
-		if (manifestMatch || tagsMatch) {
+
+		// If request has authentication, we must proxy (auth token is for our domain, not upstream)
+		// Otherwise, we can redirect for better performance
+		if (authorization) {
 			const upstreamUrl = `https://${targetRegistry}${pathname}${url.search}`;
 			const newReq = new Request(upstreamUrl, {
 				method: request.method,
 				headers: request.headers,
 				redirect: 'follow',
 			});
-			
+
 			const resp = await fetch(newReq);
-			
+
 			// If upstream requires auth, return 401 with our auth endpoint
 			if (resp.status === 401) {
 				return responseUnauthorized(url);
 			}
-			
+
 			return resp;
+		} else {
+			// No auth - safe to redirect
+			const redirectUrl = `https://${targetRegistry}${pathname}${url.search}`;
+			return Response.redirect(redirectUrl, 307);
 		}
-		
-		// Unknown endpoint
-		return new Response('Not found', { status: 404 });
 	},
 } satisfies ExportedHandler<Env>;
