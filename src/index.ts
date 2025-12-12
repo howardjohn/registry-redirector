@@ -17,20 +17,20 @@ interface Env {
 	IMAGE_PULLS: AnalyticsEngineDataset;
 }
 
-type RegistryConfig = {
+type RegistryMapping = {
+	[repo: string]: string;
 	base: string;
-	repo?: string;
 };
 
 type TargetRegistries = {
-	[domain: string]: RegistryConfig;
+	[domain: string]: RegistryMapping;
 };
 
 /**
  * Get registry configuration based on Host header
  * Falls back to '*' if no match is found
  */
-function getRegistryConfig(host: string, registries: TargetRegistries): RegistryConfig {
+function getRegistryConfig(host: string, registries: TargetRegistries): RegistryMapping {
 	// Try exact match first
 	if (registries[host]) {
 		return registries[host];
@@ -49,7 +49,7 @@ function getRegistryConfig(host: string, registries: TargetRegistries): Registry
  * Example: base="ghcr.io", repo="agentgateway", path="/v2/myimage/manifests/latest"
  *          -> "https://ghcr.io/v2/agentgateway/myimage/manifests/latest"
  */
-function buildUpstreamUrl(config: RegistryConfig, pathname: string, search: string = ''): string {
+function buildUpstreamUrl(config: RegistryMapping, pathname: string, search: string = ''): string {
 	const base = config.base;
 	let path = pathname;
 	
@@ -65,6 +65,18 @@ function buildUpstreamUrl(config: RegistryConfig, pathname: string, search: stri
 	}
 	
 	return `https://${base}${path}${search}`;
+}
+
+function getMapping(config: RegistryMapping, repo: string): string {
+	const spl = repo.split('/', 2);
+	const base: string = spl[0];
+	if (config.mappings[base]) {
+		if (spl.length > 1) {
+			return config.mappings[base] + "/" + spl[1];
+		}
+		return config.mappings[base];
+	}
+	return repo;
 }
 
 /**
@@ -202,7 +214,6 @@ function trackImagePull(
 			doubles: [timestamp],
 			indexes: [imageInfo.image],
 		};
-		console.log("data", data);
 		analytics.writeDataPoint(data);
 	} catch (error) {
 		// Silently fail analytics tracking to not break the request
@@ -225,10 +236,11 @@ export default {
 		const url = new URL(request.url);
 		const method = request.method;
 		const pathname = url.pathname;
-		const host = request.headers.get('Host') || url.hostname;
+		const hostHeader = request.headers.get('Host') || url.hostname;
+		const host = hostHeader.split(':')[0];
 		
 		// Get registry configuration based on Host header
-		let registryConfig: RegistryConfig;
+		let registryConfig: RegistryMapping;
 		try {
 			registryConfig = getRegistryConfig(host, env.TARGET_REGISTRIES);
 		} catch (error) {
@@ -283,6 +295,17 @@ export default {
 		if (pathname === '/v2/auth') {
 			// First check if upstream requires auth
 			const upstreamUrl = buildUpstreamUrl(registryConfig, '/v2/');
+			let scope: string | null = url.searchParams.get('scope');
+			if (!scope) {
+				return new Response(JSON.stringify({ error: 'scope is required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+			}
+			// We get a scope like `repository:my-image:pull.
+			// We need to rewrite it to `repository:/my-image:pull`
+			const parts = scope.split(':', 3);
+			const newRepo = getMapping(registryConfig, parts[1]);
+			scope = `repository:${newRepo}:${parts[2]}`;
+			const newUrl = new URL(upstreamUrl);
+			newUrl.searchParams.set('scope', scope);
 			const resp = await fetch(upstreamUrl, {
 				method: 'GET',
 				redirect: 'follow',
@@ -298,22 +321,20 @@ export default {
 			}
 
 			const wwwAuthenticate = parseAuthenticate(authenticateStr);
-			let scope = url.searchParams.get('scope');
-
-			if (scope && registryConfig.repo) {
-				// We get a scope like `repository:my-image:pull` (at least for GHCR).
-				// We need to rewrite it to `repository:{repo}/my-image:pull`
-				const parts = scope.split(':', 3);
-				scope = `repository:${registryConfig.repo}/${parts[1]}:${parts[2]}`;
-			}
 
 			return await fetchToken(wwwAuthenticate, scope, authorization);
 		}
 
+		let upstreamUrl: string;
+		if (pathname.startsWith('/v2/')) {
+			const newPathname = pathname.replace(`/v2/${imageInfo.image}/`, "/v2/" + getMapping(registryConfig, imageInfo.image) + "/");
+			upstreamUrl = buildUpstreamUrl(registryConfig, newPathname, url.search);
+		} else {
+			upstreamUrl = buildUpstreamUrl(registryConfig, pathname, url.search);
+		}
 		// If request has authentication, we must proxy (auth token is for our domain, not upstream)
 		// Otherwise, we can redirect for better performance
 		if (authorization) {
-			const upstreamUrl = buildUpstreamUrl(registryConfig, pathname, url.search);
 			const newReq = new Request(upstreamUrl, {
 				method: request.method,
 				headers: request.headers,
@@ -330,8 +351,7 @@ export default {
 			return resp;
 		} else {
 			// No auth - safe to redirect
-			const redirectUrl = buildUpstreamUrl(registryConfig, pathname, url.search);
-			return Response.redirect(redirectUrl, 307);
+			return Response.redirect(upstreamUrl, 307);
 		}
 	},
 } satisfies ExportedHandler<Env>;

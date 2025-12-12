@@ -14,10 +14,24 @@
 	],
 	"vars": {
 		"TARGET_REGISTRIES": {
-			"*": {
-				"base": "ghcr.io",
-				"repo": "agentgateway",
+			// "*": {
+			// 	"base": "ghcr.io",
+			// 	"repo": "agentgateway",
+			// },
+			"cr.istio.howardjohn.info": {
+				"base": "gcr.io",
+				"mappings": {
+					"testing": "istio-testing",
+					"release": "istio-release",
+				},
 			},
+			"cr.agentgateway.howardjohn.info": {
+				"base": "ghcr.io",
+				"mappings": {
+					"agentgateway": "agentgateway/agentgateway",
+					"controller": "kgateway-dev/kgateway",
+				},
+			}
 		}
 	},
 }
