@@ -1,127 +1,204 @@
-import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloudflare:test';
-import { describe, it, expect } from 'vitest';
-import worker from '../src/index';
+import {createExecutionContext, env, fetchMock, waitOnExecutionContext} from 'cloudflare:test';
+import {beforeAll, afterEach, describe, expect, it} from 'vitest';
+import worker, {buildUpstreamUrl, getMapping} from '../src/index';
+
+beforeAll(() => {
+	// Enable outbound request mocking...
+	fetchMock.activate();
+	// ...and throw errors if an outbound request isn't mocked
+	fetchMock.disableNetConnect();
+});
+// Ensure we matched every mock we defined
+afterEach(() => fetchMock.assertNoPendingInterceptors());
 
 // For now, you'll need to do something like this to get a correctly-typed
 // `Request` to pass to `worker.fetch()`.
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 
+async function runFetch(url: string) {
+	const request = new IncomingRequest(url);
+	const ctx = createExecutionContext();
+	const response = await worker.fetch(request, env, ctx);
+	await waitOnExecutionContext(ctx);
+	return response;
+}
+
+function setupMock(url: string) {
+	const parsed = new URL(url);
+	fetchMock
+		.get(parsed.protocol + '//' + parsed.host)
+		.intercept({path: parsed.pathname + parsed.search})
+		.reply(200, "body");
+}
+
+function setup401Mock(url: string) {
+	const parsed = new URL(url);
+	fetchMock
+		.get(parsed.protocol + '//' + parsed.host)
+		.intercept({path: parsed.pathname})
+		.reply(401, "body", {
+			headers: { 'WWW-Authenticate': 'Bearer realm="https://example.org/v2/token",service="example.com"' }
+		});
+}
+
 describe('OCI Registry Redirector', () => {
 	it('redirects root to /v2/', async () => {
-		const request = new IncomingRequest('https://example.com/');
-		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, env, ctx);
-		await waitOnExecutionContext(ctx);
-		
+		const response = await runFetch('https://cr.example.com/');
 		expect(response.status).toBe(301);
 		const location = response.headers.get('Location');
-		expect(location).toBe('https://example.com/v2/');
+		expect(location).toBe('https://cr.example.com/v2/');
 	});
 
 	it('proxies /v2/ endpoint to target registry', async () => {
-		const request = new IncomingRequest('https://example.com/v2/');
-		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, env, ctx);
-		await waitOnExecutionContext(ctx);
-		
-		// This will actually proxy to ghcr.io, so we can't assert exact status
-		// but we can verify it's not a redirect
-		expect(response.status).not.toBe(307);
-		expect(response.status).not.toBe(301);
+		setupMock("https://example.org/v2/");
+		const response = await runFetch('https://cr.example.com/v2/');
+		expect(response.status).toBe(200);
 	});
 
-	it('redirects blob requests to target registry', async () => {
+	it('handles blobs', async () => {
 		const digest = 'sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
-		const request = new IncomingRequest(`https://example.com/v2/myorg/myimage/blobs/${digest}`);
-		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, env, ctx);
-		await waitOnExecutionContext(ctx);
-		
-		expect(response.status).toBe(307);
-		const location = response.headers.get('Location');
-		expect(location).toBe(`https://ghcr.io/v2/myorg/myimage/blobs/${digest}`);
+		setupMock(`https://example.org/v2/a/b/blobs/${digest}`);
+		await runFetch(`https://cr.example.com/v2/image1/blobs/${digest}`);
+
+		setupMock(`https://example.org/v2/c/bar/blobs/${digest}`);
+		await runFetch(`https://cr.example.com/v2/image2/bar/blobs/${digest}`);
 	});
 
-	it('proxies manifest requests to target registry', async () => {
-		const request = new IncomingRequest('https://example.com/v2/myorg/myimage/manifests/latest');
-		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, env, ctx);
-		await waitOnExecutionContext(ctx);
-		
-		// Manifest requests are proxied, not redirected
-		expect(response.status).not.toBe(307);
-		expect(response.status).not.toBe(301);
+	it('handles manifests', async () => {
+		setupMock(`https://example.org/v2/a/b/manifests/latest`);
+		await runFetch(`https://cr.example.com/v2/image1/manifests/latest`);
+		setupMock(`https://example.org/v2/c/bar/manifests/latest`);
+		await runFetch(`https://cr.example.com/v2/image2/bar/manifests/latest`);
 	});
 
-	it('proxies tags list requests to target registry', async () => {
-		const request = new IncomingRequest('https://example.com/v2/myorg/myimage/tags/list');
-		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, env, ctx);
-		await waitOnExecutionContext(ctx);
-		
-		// Tags requests are proxied, not redirected
-		expect(response.status).not.toBe(307);
-		expect(response.status).not.toBe(301);
+	it('handles tags', async () => {
+		setupMock(`https://example.org/v2/a/b/tags/list`);
+		await runFetch(`https://cr.example.com/v2/image1/tags/list`);
+		setupMock(`https://example.org/v2/c/bar/tags/list`);
+		await runFetch(`https://cr.example.com/v2/image2/bar/tags/list`);
 	});
 
-	it('handles /v2/auth token endpoint', async () => {
-		const request = new IncomingRequest('https://example.com/v2/auth?scope=repository:myorg/myimage:pull');
-		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, env, ctx);
-		await waitOnExecutionContext(ctx);
-		
-		// Token endpoint proxies to upstream, so we can't assert exact status
-		// but we can verify it's not a redirect or error
-		expect(response.status).not.toBe(307);
-		expect(response.status).not.toBe(301);
-		expect(response.status).not.toBe(404);
+	it('handles auth for image1', async () => {
+		setup401Mock(`https://example.org/v2/`);
+		setupMock(`https://example.org/v2/token?service=example.com&scope=repository:a/b:pull`);
+		await runFetch(`https://cr.example.com/v2/auth?scope=repository:image1:pull`);
 	});
 
-	it('preserves query parameters in blob redirects', async () => {
-		const digest = 'sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
-		const request = new IncomingRequest(`https://example.com/v2/myorg/myimage/blobs/${digest}?n=5`);
-		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, env, ctx);
-		await waitOnExecutionContext(ctx);
-		
-		expect(response.status).toBe(307);
-		const location = response.headers.get('Location');
-		expect(location).toBe(`https://ghcr.io/v2/myorg/myimage/blobs/${digest}?n=5`);
+	it('handles auth for image2', async () => {
+		setup401Mock(`https://example.org/v2/`);
+		setupMock(`https://example.org/v2/token?service=example.com&scope=repository:c/bar:pull`);
+		await runFetch(`https://cr.example.com/v2/auth?scope=repository:image2/bar:pull`);
+	});
+});
+
+describe('buildUpstreamUrl', () => {
+	it('builds URL with base and pathname', () => {
+		const config = { base: 'ghcr.io', mappings: {} };
+		const result = buildUpstreamUrl(config, '/v2/myorg/myimage/manifests/latest');
+		expect(result).toBe('https://ghcr.io/v2/myorg/myimage/manifests/latest');
 	});
 
-	it('uses custom target registry from env', async () => {
-		const customEnv = { ...env, TARGET_REGISTRY: 'registry.example.com' };
-		const digest = 'sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
-		const request = new IncomingRequest(`https://example.com/v2/myorg/myimage/blobs/${digest}`);
-		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, customEnv, ctx);
-		await waitOnExecutionContext(ctx);
-		
-		expect(response.status).toBe(307);
-		const location = response.headers.get('Location');
-		expect(location).toBe(`https://registry.example.com/v2/myorg/myimage/blobs/${digest}`);
+	it('includes search parameters', () => {
+		const config = { base: 'ghcr.io', mappings: {} };
+		const result = buildUpstreamUrl(config, '/v2/myorg/myimage/manifests/latest', '?n=5');
+		expect(result).toBe('https://ghcr.io/v2/myorg/myimage/manifests/latest?n=5');
 	});
 
-	it('returns 500 error when TARGET_REGISTRY is missing', async () => {
-		const envWithoutRegistry = { ...env };
-		delete (envWithoutRegistry as any).TARGET_REGISTRY;
-		const request = new IncomingRequest('https://example.com/v2/');
-		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, envWithoutRegistry as typeof env, ctx);
-		await waitOnExecutionContext(ctx);
-		
-		expect(response.status).toBe(500);
-		const body = await response.json();
-		expect(body).toHaveProperty('error');
-		expect(body.error).toContain('TARGET_REGISTRY');
+	it('handles /v2 path without repo', () => {
+		const config = { base: 'ghcr.io', mappings: {} };
+		const result = buildUpstreamUrl(config, '/v2');
+		expect(result).toBe('https://ghcr.io/v2');
 	});
 
-	it('returns 404 for unknown endpoints', async () => {
-		const request = new IncomingRequest('https://example.com/v2/unknown/endpoint');
-		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, env, ctx);
-		await waitOnExecutionContext(ctx);
-		
-		expect(response.status).toBe(404);
+	it('handles /v2/ path without repo', () => {
+		const config = { base: 'ghcr.io', mappings: {} };
+		const result = buildUpstreamUrl(config, '/v2/');
+		expect(result).toBe('https://ghcr.io/v2/');
 	});
+
+	it('preserves /v2 path when repo is specified', () => {
+		const config = { base: 'ghcr.io', mappings: {}, repo: 'agentgateway' };
+		const result = buildUpstreamUrl(config, '/v2');
+		expect(result).toBe('https://ghcr.io/v2');
+	});
+
+	it('preserves /v2/ path when repo is specified', () => {
+		const config = { base: 'ghcr.io', mappings: {}, repo: 'agentgateway' };
+		const result = buildUpstreamUrl(config, '/v2/');
+		expect(result).toBe('https://ghcr.io/v2/');
+	});
+
+	it('prepends repo to /v2/... paths', () => {
+		const config = { base: 'ghcr.io', mappings: {}, repo: 'agentgateway' };
+		const result = buildUpstreamUrl(config, '/v2/myimage/manifests/latest');
+		expect(result).toBe('https://ghcr.io/v2/agentgateway/myimage/manifests/latest');
+	});
+
+	it('prepends repo to /v2/... paths with search params', () => {
+		const config = { base: 'ghcr.io', mappings: {}, repo: 'agentgateway' };
+		const result = buildUpstreamUrl(config, '/v2/myimage/blobs/sha256:abc', '?n=5');
+		expect(result).toBe('https://ghcr.io/v2/agentgateway/myimage/blobs/sha256:abc?n=5');
+	});
+
+	it('does not modify non-/v2 paths even with repo', () => {
+		const config = { base: 'ghcr.io', mappings: {}, repo: 'agentgateway' };
+		const result = buildUpstreamUrl(config, '/other/path');
+		expect(result).toBe('https://ghcr.io/other/path');
+	});
+
+	it('handles empty search string', () => {
+		const config = { base: 'ghcr.io', mappings: {} };
+		const result = buildUpstreamUrl(config, '/v2/test', '');
+		expect(result).toBe('https://ghcr.io/v2/test');
+	});
+});
+
+describe('getMapping', () => {
+	it('returns mapped repo for single-part repo with mapping', () => {
+		const config = {
+			base: 'ghcr.io',
+			mappings: { 'repo1': 'flat' }
+		};
+		const result = getMapping(config, 'repo1');
+		expect(result).toBe('flat');
+	});
+
+	it('returns mapped repo with subpath for two-part repo with mapping', () => {
+		const config = {
+			base: 'ghcr.io',
+			mappings: { 'myorg': 'mappedorg' }
+		};
+		const result = getMapping(config, 'myorg/myimage');
+		expect(result).toBe('mappedorg/myimage');
+	});
+
+	it('returns original repo when no mapping exists (single part)', () => {
+		const config = {
+			base: 'ghcr.io',
+			mappings: { 'otherorg': 'mappedorg' }
+		};
+		const result = getMapping(config, 'myorg');
+		expect(result).toBe(null);
+	});
+
+	it('handles multi', () => {
+		const config = {
+			base: 'ghcr.io',
+			mappings: { 'myorg': 'a/b' }
+		};
+		const result = getMapping(config, 'myorg');
+		expect(result).toBe('a/b');
+	});
+
+	it('handles multi with Link', () => {
+		// On a paginated call, the Link header will trigger the user to call a/b on subsequent calls.
+		// Perhaps we should modify the Link, but for now we just handle the request
+		const config = {
+			base: 'ghcr.io',
+			mappings: { 'myorg': 'a/b' }
+		};
+		const result = getMapping(config, 'a/b');
+		expect(result).toBe('a/b');
+	});
+
 });
