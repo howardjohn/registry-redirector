@@ -21,12 +21,16 @@ export type RegistryMapping = {
 	mappings: {
 		[repo: string]: string;
 	};
-	base: string;
 };
 
 export type TargetRegistries = {
 	[domain: string]: RegistryMapping;
 };
+
+export type MappingResult = {
+	base: string;
+	repo: string;
+} | null;
 
 /**
  * Get registry configuration based on Host header
@@ -45,47 +49,26 @@ function getRegistryConfig(host: string, registries: TargetRegistries): Registry
 	throw new Error('No registry configuration found for host and no wildcard (*) fallback configured');
 }
 
-/**
- * Build upstream URL with optional repo prefix
- * If repo is specified, it's prepended to the path
- * Example: base="ghcr.io", repo="agentgateway", path="/v2/myimage/manifests/latest"
- *          -> "https://ghcr.io/v2/agentgateway/myimage/manifests/latest"
- */
-export function buildUpstreamUrl(config: RegistryMapping, pathname: string, search: string = ''): string {
-	const base = config.base;
-	let path = pathname;
-
-	// If repo is specified and path starts with /v2, prepend repo
-	if (config.repo && pathname.startsWith('/v2')) {
-		if (pathname === '/v2' || pathname === '/v2/') {
-			// For /v2 or /v2/, use the original path
-			path = pathname;
-		} else {
-			// For /v2/..., replace /v2/ with /v2/{repo}/
-			path = `/v2/${config.repo}${pathname.slice(3)}`; // slice(3) removes '/v2'
-		}
-	}
-
-	return `https://${base}${path}${search}`;
-}
-
-export function getMapping(config: RegistryMapping, repo: string): string | null {
-	const spl = repo.split('/', 2);
+export function getMapping(config: RegistryMapping, repo: string): MappingResult | null {
+	const spl = splitWithTail(repo,'/', 1);
 	const base: string = spl[0];
 	if (config.mappings[base]) {
+		const keyParts = splitWithTail(config.mappings[base],'/', 1);
 		if (spl.length > 1) {
-			return config.mappings[base] + "/" + spl[1];
+			return {base: keyParts[0], repo: keyParts[1] + "/" + spl[1]};
 		}
-		const res = config.mappings[base];
-		if (res !== null) {
-			return res;
-		}
+		return {base: keyParts[0], repo: keyParts[1]};
 	}
 
 	// Check: does any value, not key, in mappings equal 'repo'
-	if (Object.values(config.mappings).includes(repo)) {
-		return repo;
+	// If so, find the key that has this value and extract base from it
+	for (const value of Object.values(config.mappings)) {
+		const keyParts = splitWithTail(value,'/', 1);
+		if (keyParts.length == 2 && keyParts[1] === repo) {
+			return {base: keyParts[0], repo: keyParts[1]};
+		}
 	}
+
 	return null;
 }
 
@@ -119,6 +102,7 @@ function responseUnauthorized(url: URL): Response {
 		'Www-Authenticate',
 		`Bearer realm="${protocol}://${realmHost}/v2/auth",service="${serviceHost}"`
 	);
+	headers.set('Docker-Distribution-Api-Version', 'registry/2.0')
 	return new Response(JSON.stringify({message: 'UNAUTHORIZED'}), {
 		status: 401,
 		headers: headers,
@@ -269,12 +253,12 @@ async function handleBlob(cfg: RegistryMapping, request: Request, path: string, 
 }
 
 async function handleGeneric(cfg: RegistryMapping, request: Request, path: string, image: string) {
-	const newRepo = getMapping(cfg, image);
-	if (newRepo === null) {
+	const mapping = getMapping(cfg, image);
+	if (mapping === null) {
 		return handleUnknown(cfg);
 	}
-	const newPathname = path.replace(`/v2/${image}/`, `/v2/${newRepo}/`);
-	const newUrl = `https://${cfg.base}${newPathname}`
+	const newPathname = path.replace(`/v2/${image}/`, `/v2/${mapping.repo}/`);
+	const newUrl = `https://${mapping.base}${newPathname}`
 	const newReq = new Request(newUrl, {
 		method: request.method,
 		headers: request.headers,
@@ -290,7 +274,7 @@ async function handleGeneric(cfg: RegistryMapping, request: Request, path: strin
 	const location = resp.headers.get('location');
 	if (location && location.startsWith('/')) {
 		// This is a relative redirect. Map it back to an absolute URL
-		const newLocation = `https://${cfg.base}${location}`
+		const newLocation = `https://${mapping.base}${location}`
 		const newResponse = new Response(resp.body, resp);
 		newResponse.headers.set('location', newLocation);
 		return newResponse
@@ -302,35 +286,20 @@ async function handleTags(cfg: RegistryMapping, request: Request, path: string, 
 	const resp = await handleGeneric(cfg, request, path, image);
 	const link = resp.headers.get('link');
 	if (link) {
-		const newRepo = getMapping(cfg, image);
-		// The Link will link to the real repository. We need to map it back to our synthetic one
-		const newResponse = new Response(resp.body, resp);
-		newResponse.headers.set('link', link.replace(`/v2/${newRepo}/tags`, `/v2/${image}/tags`));
-		return newResponse
+		const mapping = getMapping(cfg, image);
+		if (mapping !== null) {
+			// The Link will link to the real repository. We need to map it back to our synthetic one
+			const newResponse = new Response(resp.body, resp);
+			newResponse.headers.set('link', link.replace(`/v2/${mapping.repo}/tags`, `/v2/${image}/tags`));
+			return newResponse
+		}
 	}
 
 	return resp;
 }
 
-async function handleRoot(cfg: RegistryMapping, request: Request, authorization: string | null) {
-	const upstreamUrl = `https://${cfg.base}/v2/`;
-	const headers = new Headers();
-	if (authorization) {
-		headers.set('Authorization', authorization);
-	}
-
-	const resp = await fetchLog(upstreamUrl, {
-		method: 'GET',
-		headers: headers,
-		redirect: 'follow',
-	});
-
-	// If upstream requires auth, return 401 with our auth endpoint
-	if (resp.status === 401) {
-		return responseUnauthorized(new URL(request.url));
-	}
-
-	return resp;
+async function handleRoot(cfg: RegistryMapping, request: Request) {
+	return responseUnauthorized(new URL(request.url));
 }
 
 async function handleAuth(cfg: RegistryMapping, authorization: string | null, originalUrl: URL) {
@@ -344,14 +313,14 @@ async function handleAuth(cfg: RegistryMapping, authorization: string | null, or
 	// We get a scope like `repository:my-image:pull.
 	// We need to rewrite it to `repository:/my-image:pull`
 	const parts = scope.split(':', 3);
-	const newRepo = getMapping(cfg, parts[1]);
-	if (newRepo === null) {
+	const mapping = getMapping(cfg, parts[1]);
+	if (mapping === null) {
 		return handleUnknown(cfg);
 	}
-	scope = `repository:${newRepo}:${parts[2]}`;
+	scope = `repository:${mapping.repo}:${parts[2]}`;
 
 	// Send a request to /v2/ to get the WWW-Authenticate header so we know where to send the token request to
-	const newUrl = new URL(`https://${cfg.base}/v2/`);
+	const newUrl = new URL(`https://${mapping.base}/v2/`);
 	const resp = await fetchLog(newUrl, {
 		method: 'GET',
 		redirect: 'follow',
@@ -438,7 +407,7 @@ export default {
 			case ImagePathType.Tags:
 				return await handleTags(registryConfig, request, pathAndQuery, parsed.image);
 			case ImagePathType.V2Root:
-				return await handleRoot(registryConfig, request, authorization);
+				return await handleRoot(registryConfig, request);
 			case ImagePathType.Auth:
 				return await handleAuth(registryConfig, authorization, url);
 			default:
@@ -460,4 +429,14 @@ function fetchLog(input: RequestInfo | URL, init?: RequestInit<RequestInitCfProp
 	}
 	console.log("fetch:", urlStr);
 	return fetch(input, init);
+}
+
+function splitWithTail(str: string, delim: string, count: number): string[] {
+	var parts = str.split(delim);
+	var tail = parts.slice(count).join(delim);
+	var result = parts.slice(0, count);
+	if (tail !== "") {
+		result.push(tail);
+	}
+	return result;
 }

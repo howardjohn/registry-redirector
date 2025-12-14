@@ -16,18 +16,16 @@
 			],
 			"vars": {
 				"TARGET_REGISTRIES": {
-					"cr.istio.howardjohn.info": {
-						"base": "gcr.io",
+					"images.istio.howardjohn.info": {
 						"mappings": {
-							"testing": "istio-testing",
-							"release": "istio-release"
+							"testing": "gcr.io/istio-testing",
+							"release": "index.docker.io/istio"
 						}
 					},
-					"cr.agentgateway.howardjohn.info": {
-						"base": "ghcr.io",
+					"images.agentgateway.dev": {
 						"mappings": {
-							"agentgateway": "agentgateway/agentgateway",
-							"controller": "kgateway-dev/kgateway"
+							"agentgateway": "ghcr.io/agentgateway/agentgateway",
+							"controller": "ghcr.io/kgateway-dev/kgateway"
 						}
 					}
 				}
@@ -43,10 +41,9 @@
 			"vars": {
 				"TARGET_REGISTRIES": {
 					"cr.example.com": {
-						"base": "example.org",
 						"mappings": {
-							"image1": "a/b",
-							"image2": "c"
+							"image1": "example.org/a/b",
+							"image2": "alt.example.org/c"
 						}
 					}
 				}
