@@ -1,13 +1,14 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "registry-redirect001",
+	"name": "registry-redirect",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-12-02",
 	"observability": {
 		"enabled": true
 	},
 	"env": {
-		"production": {
+		"agentgateway": {
+			"account_id": "0653eeaee9bffe11be6693c01ef6e885",
 			"analytics_engine_datasets": [
 				{
 					"binding": "IMAGE_PULLS",
@@ -16,16 +17,30 @@
 			],
 			"vars": {
 				"TARGET_REGISTRIES": {
-					"images.istio.howardjohn.info": {
+					"cr.agentgateway.local": {
+						"mappings": {
+							"agentgateway": "ghcr.io/agentgateway/agentgateway",
+							"controller": "ghcr.io/kgateway-dev/kgateway",
+							"charts/agentgateway": "ghcr.io/kgateway-dev/charts/agentgateway"
+						}
+					}
+				}
+			}
+		},
+		"istio": {
+			"account_id": "1eb8152ceed73d3ee6f66c3557819d4c",
+			"analytics_engine_datasets": [
+				{
+					"binding": "IMAGE_PULLS",
+					"dataset": "image_pulls"
+				}
+			],
+			"vars": {
+				"TARGET_REGISTRIES": {
+					"registry-redirect-istio.cncf-istio.workers.dev": {
 						"mappings": {
 							"testing": "gcr.io/istio-testing",
 							"release": "index.docker.io/istio"
-						}
-					},
-					"images.agentgateway.dev": {
-						"mappings": {
-							"agentgateway": "ghcr.io/agentgateway/agentgateway",
-							"controller": "ghcr.io/kgateway-dev/kgateway"
 						}
 					}
 				}
@@ -43,7 +58,8 @@
 					"cr.example.com": {
 						"mappings": {
 							"image1": "example.org/a/b",
-							"image2": "alt.example.org/c"
+							"image2": "alt.example.org/c",
+							"image3/subimage": "alt.example.org/d/e"
 						}
 					}
 				}

@@ -50,16 +50,18 @@ function getRegistryConfig(host: string, registries: TargetRegistries): Registry
 }
 
 export function getMapping(config: RegistryMapping, repo: string): MappingResult | null {
-	const spl = splitWithTail(repo,'/', 1);
-	const base: string = spl[0];
-	if (config.mappings[base]) {
-		const keyParts = splitWithTail(config.mappings[base],'/', 1);
-		if (spl.length > 1) {
-			return {base: keyParts[0], repo: keyParts[1] + "/" + spl[1]};
-		}
-		return {base: keyParts[0], repo: keyParts[1]};
-	}
+	const spl = repo.split('/')
 
+	const base: string = spl[0];
+	for (let i = spl.length; i > 0; i--) {
+		const path = spl.slice(0, i).join('/');
+		if (config.mappings[path]) {
+			const keyParts = splitWithTail(config.mappings[path],'/', 1);
+			const base = keyParts[0];
+			return {base: base, repo: repo.replace(path, keyParts[1])};
+
+		}
+	}
 	// Check: does any value, not key, in mappings equal 'repo'
 	// If so, find the key that has this value and extract base from it
 	for (const value of Object.values(config.mappings)) {

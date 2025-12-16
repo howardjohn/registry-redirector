@@ -135,4 +135,14 @@ describe('getMapping', () => {
 		expect(result?.base).toBe('ghcr.io');
 	});
 
+	it('handles multi map', () => {
+		const config = {
+			mappings: { 'x/y': 'ghcr.io/a/b' }
+		};
+		const result = getMapping(config, 'x/y');
+		expect(result?.repo).toBe('a/b');
+		expect(result?.base).toBe('ghcr.io');
+	});
+
+
 });
