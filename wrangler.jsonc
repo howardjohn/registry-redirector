@@ -17,7 +17,7 @@
 			],
 			"vars": {
 				"TARGET_REGISTRIES": {
-					"cr.agentgateway.local": {
+					"cr.agentgateway.dev": {
 						"mappings": {
 							"agentgateway": "ghcr.io/agentgateway/agentgateway",
 							"controller": "ghcr.io/kgateway-dev/kgateway",
