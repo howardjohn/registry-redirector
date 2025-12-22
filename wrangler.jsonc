@@ -20,8 +20,10 @@
 					"cr.agentgateway.dev": {
 						"mappings": {
 							"agentgateway": "ghcr.io/agentgateway/agentgateway",
-							"controller": "ghcr.io/kgateway-dev/kgateway",
-							"charts/agentgateway": "ghcr.io/kgateway-dev/charts/agentgateway"
+							// TODO: replace this with 'controller' pointing to an agentgateway specific controller image
+							"kgateway": "ghcr.io/kgateway-dev/kgateway",
+							"charts/agentgateway": "ghcr.io/kgateway-dev/charts/agentgateway",
+							"charts/agentgateway-crds": "ghcr.io/kgateway-dev/charts/agentgateway-crds"
 						}
 					}
 				}
