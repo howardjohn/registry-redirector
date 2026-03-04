@@ -74,20 +74,32 @@ export function getMapping(config: RegistryMapping, repo: string): MappingResult
 	return null;
 }
 
+function getValueAfterEquals(str: string): string | null {
+	const eqIndex = str.indexOf('=');
+	if (eqIndex === -1) {
+		return null;
+	}
+	return str.substring(eqIndex + 1).trim().replace(/^"|"$/g, '');
+}
+
 /**
  * Parse WWW-Authenticate header
  * Format: Bearer realm="https://auth.example.com/token",service="registry.example.com"
+ * Format: Bearer realm="https://auth.example.com/token",service=registry.example.com
  */
 function parseAuthenticate(authenticateStr: string): { realm: string; service: string } {
-	// Match strings after =" and before "
-	const re = /(?<=\=")(?:\\.|[^"\\])*(?=")/g;
-	const matches = authenticateStr.match(re);
-	if (matches == null || matches.length < 2) {
+	const parts = authenticateStr.replace(/^Bearer\s+/i, '').split(/,\s*/).map(s => s.trim());
+	const realmPart = parts.find(p => p.startsWith('realm='));
+	const servicePart = parts.find(p => p.startsWith('service='));
+	if (!realmPart || !servicePart) {
 		throw new Error(`invalid Www-Authenticate Header: ${authenticateStr}`);
 	}
+	const realm = getValueAfterEquals(realmPart);
+	const service = getValueAfterEquals(servicePart);
+
 	return {
-		realm: matches[0],
-		service: matches[1],
+		realm,
+		service,
 	};
 }
 
