@@ -31,13 +31,23 @@ function setupMock(url: string) {
 		.reply(200, "body");
 }
 
-function setup401Mock(url: string) {
+function setup401Mock(url: string, quoteRealm = true, quoteService = true) {
 	const parsed = new URL(url);
+
+	let realmValue = `${url}token`;
+	if (quoteRealm) {
+		realmValue = `"${realmValue}"`;
+	}
+	let serviceValue = `example.com`;
+	if (quoteService) {
+		serviceValue = `"${serviceValue}"`;
+	}
+	const wwwAuthenticate = `Bearer realm=${realmValue},service=${serviceValue}`;
 	fetchMock
 		.get(parsed.protocol + '//' + parsed.host)
 		.intercept({path: parsed.pathname})
 		.reply(401, "body", {
-			headers: { 'WWW-Authenticate': `Bearer realm="${url}token",service="example.com"` }
+			headers: { 'WWW-Authenticate': wwwAuthenticate }
 		});
 }
 
@@ -78,15 +88,24 @@ describe('OCI Registry Redirector', () => {
 	});
 
 	it('handles auth for image1', async () => {
-		setup401Mock(`https://example.org/v2/`);
-		setupMock(`https://example.org/v2/token?service=example.com&scope=repository:a/b:pull`);
-		await runFetch(`https://cr.example.com/v2/auth?scope=repository:image1:pull`);
+		for (const quoteRealm of [true, false]) {
+			for (const quoteService of [true, false]) {
+				setup401Mock(`https://example.org/v2/`, quoteRealm, quoteService);
+				setupMock(`https://example.org/v2/token?service=example.com&scope=repository:a/b:pull`);
+				await runFetch(`https://cr.example.com/v2/auth?scope=repository:image1:pull`);
+			}
+		}
 	});
 
 	it('handles auth for image2', async () => {
-		setup401Mock(`https://alt.example.org/v2/`);
-		setupMock(`https://alt.example.org/v2/token?service=example.com&scope=repository:c/bar:pull`);
-		await runFetch(`https://cr.example.com/v2/auth?scope=repository:image2/bar:pull`);
+		for (const quoteRealm of [true, false]) {
+			for (const quoteService of [true, false]) {
+				setup401Mock(`https://alt.example.org/v2/`, quoteRealm, quoteService);
+				setupMock(`https://alt.example.org/v2/token?service=example.com&scope=repository:c/bar:pull`);
+				await runFetch(`https://cr.example.com/v2/auth?scope=repository:image2/bar:pull`);
+			}
+		}
+
 	});
 });
 
