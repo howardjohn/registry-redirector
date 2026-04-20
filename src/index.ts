@@ -96,6 +96,9 @@ function parseAuthenticate(authenticateStr: string): { realm: string; service: s
 	}
 	const realm = getValueAfterEquals(realmPart);
 	const service = getValueAfterEquals(servicePart);
+	if (realm === null || service === null) {
+		throw new Error(`invalid Www-Authenticate Header: ${authenticateStr}`);
+	}
 
 	return {
 		realm,
@@ -106,15 +109,16 @@ function parseAuthenticate(authenticateStr: string): { realm: string; service: s
 /**
  * Return 401 response with rewritten WWW-Authenticate header
  */
-function responseUnauthorized(url: URL): Response {
+function responseUnauthorized(url: URL, repository?: string): Response {
 	const headers = new Headers();
 	const protocol = url.protocol === 'http' ? 'http' : 'https';
 	// Use url.host (includes port) for realm, url.hostname for service
 	const realmHost = url.host; // Includes port if present
 	const serviceHost = url.hostname; // Just the hostname
+	const scope = repository ? `,scope="repository:${repository}:pull"` : '';
 	headers.set(
 		'Www-Authenticate',
-		`Bearer realm="${protocol}://${realmHost}/v2/auth",service="${serviceHost}"`
+		`Bearer realm="${protocol}://${realmHost}/v2/auth",service="${serviceHost}"${scope}`
 	);
 	headers.set('Docker-Distribution-Api-Version', 'registry/2.0')
 	return new Response(JSON.stringify({message: 'UNAUTHORIZED'}), {
@@ -283,7 +287,7 @@ async function handleGeneric(cfg: RegistryMapping, request: Request, path: strin
 
 	// If upstream requires auth, return 401 with our auth endpoint
 	if (resp.status === 401) {
-		return responseUnauthorized(new URL(request.url));
+		return responseUnauthorized(new URL(request.url), image);
 	}
 	const location = resp.headers.get('location');
 	if (location && location.startsWith('/')) {

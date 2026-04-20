@@ -62,6 +62,9 @@ describe('OCI Registry Redirector', () => {
 	it('returns 401 on /v2/ endpoint', async () => {
 		const response = await runFetch('https://cr.example.com/v2/');
 		expect(response.status).toBe(401);
+		expect(response.headers.get('Www-Authenticate')).toBe(
+			'Bearer realm="https://cr.example.com/v2/auth",service="cr.example.com"'
+		);
 	});
 
 	it('handles blobs', async () => {
@@ -71,6 +74,17 @@ describe('OCI Registry Redirector', () => {
 
 		setupMock(`https://alt.example.org/v2/c/bar/blobs/${digest}`);
 		await runFetch(`https://cr.example.com/v2/image2/bar/blobs/${digest}`);
+	});
+
+	it('returns repo scope on unauthorized blob requests', async () => {
+		const digest = 'sha256:d865bf0feaaa03f1f4c2e70e420e1830e8cb4db80d259b7e18e6ee86ce3d3cb9';
+		setup401Mock(`https://alt.example.org/v2/d/e/blobs/${digest}`);
+		const response = await runFetch(`https://cr.example.com/v2/image3/subimage/blobs/${digest}`);
+
+		expect(response.status).toBe(401);
+		expect(response.headers.get('Www-Authenticate')).toBe(
+			'Bearer realm="https://cr.example.com/v2/auth",service="cr.example.com",scope="repository:image3/subimage:pull"'
+		);
 	});
 
 	it('handles manifests', async () => {
