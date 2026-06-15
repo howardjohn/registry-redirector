@@ -295,9 +295,24 @@ async function handleGeneric(cfg: RegistryMapping, request: Request, path: strin
 		const newLocation = `https://${mapping.base}${location}`
 		const newResponse = new Response(resp.body, resp);
 		newResponse.headers.set('location', newLocation);
-		return newResponse
+		return withNoTransform(newResponse);
 	}
-	return resp;
+	return withNoTransform(resp);
+}
+
+/**
+ * Mark the response as non-transformable so the Cloudflare edge does not
+ * compress it on the way to the client. This preserves the Content-Length header.
+ */
+function withNoTransform(resp: Response): Response {
+	const out = new Response(resp.body, resp);
+	const cacheControl = out.headers.get('Cache-Control');
+	if (!cacheControl) {
+		out.headers.set('Cache-Control', 'no-transform');
+	} else if (!/\bno-transform\b/i.test(cacheControl)) {
+		out.headers.set('Cache-Control', `${cacheControl}, no-transform`);
+	}
+	return out;
 }
 
 async function handleTags(cfg: RegistryMapping, request: Request, path: string, image: string) {
