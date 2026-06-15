@@ -23,12 +23,12 @@ async function runFetch(url: string) {
 	return response;
 }
 
-function setupMock(url: string) {
+function setupMock(url: string, headers?: Record<string, string>) {
 	const parsed = new URL(url);
 	fetchMock
 		.get(parsed.protocol + '//' + parsed.host)
 		.intercept({path: parsed.pathname + parsed.search})
-		.reply(200, "body");
+		.reply(200, "body", headers ? {headers} : undefined);
 }
 
 function setup401Mock(url: string, quoteRealm = true, quoteService = true) {
@@ -70,7 +70,8 @@ describe('OCI Registry Redirector', () => {
 	it('handles blobs', async () => {
 		const digest = 'sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
 		setupMock(`https://example.org/v2/a/b/blobs/${digest}`);
-		await runFetch(`https://cr.example.com/v2/image1/blobs/${digest}`);
+		const response = await runFetch(`https://cr.example.com/v2/image1/blobs/${digest}`);
+		expect(response.headers.get('Cache-Control')).toBe('no-transform');
 
 		setupMock(`https://alt.example.org/v2/c/bar/blobs/${digest}`);
 		await runFetch(`https://cr.example.com/v2/image2/bar/blobs/${digest}`);
@@ -89,14 +90,16 @@ describe('OCI Registry Redirector', () => {
 
 	it('handles manifests', async () => {
 		setupMock(`https://example.org/v2/a/b/manifests/latest`);
-		await runFetch(`https://cr.example.com/v2/image1/manifests/latest`);
+		const response = await runFetch(`https://cr.example.com/v2/image1/manifests/latest`);
+		expect(response.headers.get('Cache-Control')).toBe('no-transform');
 		setupMock(`https://alt.example.org/v2/c/bar/manifests/latest`);
 		await runFetch(`https://cr.example.com/v2/image2/bar/manifests/latest`);
 	});
 
 	it('handles tags', async () => {
 		setupMock(`https://example.org/v2/a/b/tags/list`);
-		await runFetch(`https://cr.example.com/v2/image1/tags/list`);
+		const response = await runFetch(`https://cr.example.com/v2/image1/tags/list`);
+		expect(response.headers.get('Cache-Control')).toBe('no-transform');
 		setupMock(`https://alt.example.org/v2/c/bar/tags/list`);
 		await runFetch(`https://cr.example.com/v2/image2/bar/tags/list`);
 	});
@@ -120,6 +123,18 @@ describe('OCI Registry Redirector', () => {
 			}
 		}
 
+	});
+
+	it('appends no-transform to an existing Cache-Control header', async () => {
+		setupMock(`https://example.org/v2/a/b/manifests/latest`, {'Cache-Control': 'max-age=3600'});
+		const response = await runFetch(`https://cr.example.com/v2/image1/manifests/latest`);
+		expect(response.headers.get('Cache-Control')).toBe('max-age=3600, no-transform');
+	});
+
+	it('does not duplicate an existing no-transform directive', async () => {
+		setupMock(`https://example.org/v2/a/b/manifests/latest`, {'Cache-Control': 'No-Transform'});
+		const response = await runFetch(`https://cr.example.com/v2/image1/manifests/latest`);
+		expect(response.headers.get('Cache-Control')).toBe('No-Transform');
 	});
 });
 
