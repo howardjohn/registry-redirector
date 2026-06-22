@@ -163,6 +163,7 @@ export enum ImagePathType {
 	Manifest = "manifest",
 	Blob = "blob",
 	Tags = "tags",
+	Referrer = "referrer",
 	V2Root = "v2",
 	Auth = "auth",
 	Unknown = "unknown",
@@ -172,6 +173,7 @@ export type ParsedImagePath =
 	| { type: ImagePathType.Manifest; image: string; reference: string }
 	| { type: ImagePathType.Blob; image: string; digest: string }
 	| { type: ImagePathType.Tags; image: string }
+	| { type: ImagePathType.Referrer; image: string; digest: string }
 	| { type: ImagePathType.V2Root }
 	| { type: ImagePathType.Auth }
 	| { type: ImagePathType.Unknown };
@@ -194,6 +196,16 @@ function parseImagePath(pathname: string): ParsedImagePath {
 			type: ImagePathType.Blob,
 			image: blobMatch[1],
 			digest: blobMatch[2],
+		};
+	}
+
+	// Match /v2/<image>/referrers/<digest>
+	const referrerMatch = pathname.match(/^\/v2\/(.+)\/referrers\/(.+)$/);
+	if (referrerMatch) {
+		return {
+			type: ImagePathType.Referrer,
+			image: referrerMatch[1],
+			digest: referrerMatch[2],
 		};
 	}
 
@@ -267,6 +279,13 @@ async function handleManifest(cfg: RegistryMapping, request: Request, path: stri
 }
 
 async function handleBlob(cfg: RegistryMapping, request: Request, path: string, image: string, digest: string) {
+	return await handleGeneric(cfg, request, path, image);
+}
+
+async function handleReferrer(cfg: RegistryMapping, request: Request, path: string, image: string, digest: string) {
+	// Note that this can return a `Link` header, but it "SHOULD" be a relative URL.
+	// https://github.com/oras-project/artifacts-spec/blob/main/manifest-referrers-api.md
+	// So I don't think we have to worry about the Link header behing a absolute URL.
 	return await handleGeneric(cfg, request, path, image);
 }
 
@@ -422,6 +441,8 @@ export default {
 				return await handleManifest(registryConfig, request, pathAndQuery, parsed.image, parsed.reference);
 			case ImagePathType.Blob:
 				return await handleBlob(registryConfig, request, pathAndQuery, parsed.image, parsed.digest);
+			case ImagePathType.Referrer:
+				return await handleReferrer(registryConfig, request, pathAndQuery, parsed.image, parsed.digest);
 			case ImagePathType.Tags:
 				return await handleTags(registryConfig, request, pathAndQuery, parsed.image);
 			case ImagePathType.V2Root:
