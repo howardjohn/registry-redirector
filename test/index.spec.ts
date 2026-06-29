@@ -104,6 +104,28 @@ describe('OCI Registry Redirector', () => {
 		await runFetch(`https://cr.example.com/v2/image2/bar/tags/list`);
 	});
 
+	it('handles referrers', async () => {
+		const digest = 'sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
+		setupMock(`https://example.org/v2/a/b/referrers/${digest}`);
+		const response = await runFetch(`https://cr.example.com/v2/image1/referrers/${digest}`);
+		expect(response.status).toBe(200);
+		expect(response.headers.get('Cache-Control')).toBe('no-transform');
+
+		setupMock(`https://alt.example.org/v2/c/bar/referrers/${digest}`);
+		await runFetch(`https://cr.example.com/v2/image2/bar/referrers/${digest}`);
+	});
+
+	it('returns repo scope on unauthorized referrers requests', async () => {
+		const digest = 'sha256:d865bf0feaaa03f1f4c2e70e420e1830e8cb4db80d259b7e18e6ee86ce3d3cb9';
+		setup401Mock(`https://alt.example.org/v2/d/e/referrers/${digest}`);
+		const response = await runFetch(`https://cr.example.com/v2/image3/subimage/referrers/${digest}`);
+
+		expect(response.status).toBe(401);
+		expect(response.headers.get('Www-Authenticate')).toBe(
+			'Bearer realm="https://cr.example.com/v2/auth",service="cr.example.com",scope="repository:image3/subimage:pull"'
+		);
+	});
+
 	it('handles auth for image1', async () => {
 		for (const quoteRealm of [true, false]) {
 			for (const quoteService of [true, false]) {
