@@ -23,7 +23,8 @@
 							"controller": "ghcr.io/agentgateway/controller",
 							"kgateway": "ghcr.io/kgateway-dev/kgateway",
 							"charts/agentgateway": "ghcr.io/agentgateway/charts/agentgateway",
-							"charts/agentgateway-crds": "ghcr.io/agentgateway/charts/agentgateway-crds"
+							"charts/agentgateway-crds": "ghcr.io/agentgateway/charts/agentgateway-crds",
+							"charts/agentgateway-standalone": "ghcr.io/agentgateway/charts/agentgateway-standalone"
 						}
 					}
 				}
