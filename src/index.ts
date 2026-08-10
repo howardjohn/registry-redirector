@@ -151,6 +151,21 @@ async function fetchToken(
 	return await fetchLog(url.toString(), {method: 'GET', headers: headers});
 }
 
+// This token is accepted only by handleRoot and grants no repository access.
+const PROXY_PING_TOKEN = 'registry-redirector-v2-ping';
+
+function issueProxyToken(): Response {
+	return new Response(JSON.stringify({
+		token: PROXY_PING_TOKEN,
+		access: [],
+	}), {
+		headers: {
+			'Cache-Control': 'no-store',
+			'Content-Type': 'application/json',
+		},
+	});
+}
+
 /**
  * Parse image information from OCI registry pathname
  * Examples:
@@ -350,21 +365,33 @@ async function handleTags(cfg: RegistryMapping, request: Request, path: string, 
 	return resp;
 }
 
-async function handleRoot(cfg: RegistryMapping, request: Request) {
+
+function handleRoot(request: Request) {
+	// Harbor retries the registry-level ping with the token from /v2/auth.
+	if (request.headers.get('Authorization') === `Bearer ${PROXY_PING_TOKEN}`) {
+		return new Response(null, {
+			status: 200,
+			headers: {'Docker-Distribution-Api-Version': 'registry/2.0'},
+		});
+	}
 	return responseUnauthorized(new URL(request.url));
 }
 
 async function handleAuth(cfg: RegistryMapping, authorization: string | null, originalUrl: URL) {
-	let scope: string | null = originalUrl.searchParams.get('scope');
+	let scope = originalUrl.searchParams.get('scope');
 	if (!scope) {
-		return new Response(JSON.stringify({error: 'scope is required'}), {
+		// A registry-level ping has no repository mapping, so handle it locally.
+		return issueProxyToken();
+	}
+	// Repository authorization continues through the mapped upstream registry.
+	// Rewrite `repository:my-image:pull` to the mapped upstream repository.
+	const parts = scope.split(':', 3);
+	if (parts.length !== 3 || parts[0] !== 'repository') {
+		return new Response(JSON.stringify({error: 'invalid scope'}), {
 			status: 400,
-			headers: {'Content-Type': 'application/json'}
+			headers: {'Content-Type': 'application/json'},
 		});
 	}
-	// We get a scope like `repository:my-image:pull.
-	// We need to rewrite it to `repository:/my-image:pull`
-	const parts = scope.split(':', 3);
 	const mapping = getMapping(cfg, parts[1]);
 	if (mapping === null) {
 		return handleUnknown(cfg);
@@ -408,7 +435,6 @@ export default {
 				{status: 500, headers: {'Content-Type': 'application/json'}}
 			);
 		}
-
 		const method = request.method;
 		if (method != "GET" && method != "HEAD") {
 			return new Response(JSON.stringify({error: 'Method not allowed'}), {
@@ -461,7 +487,7 @@ export default {
 			case ImagePathType.Tags:
 				return await handleTags(registryConfig, request, pathAndQuery, parsed.image);
 			case ImagePathType.V2Root:
-				return await handleRoot(registryConfig, request);
+				return handleRoot(request);
 			case ImagePathType.Auth:
 				return await handleAuth(registryConfig, authorization, url);
 			default:

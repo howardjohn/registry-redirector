@@ -1,6 +1,6 @@
 import {createExecutionContext, env, fetchMock, waitOnExecutionContext} from 'cloudflare:test';
 import {beforeAll, afterEach, describe, expect, it} from 'vitest';
-import worker, {buildUpstreamUrl, getMapping} from '../src/index';
+import worker, {getMapping} from '../src/index';
 
 beforeAll(() => {
 	// Enable outbound request mocking...
@@ -15,8 +15,8 @@ afterEach(() => fetchMock.assertNoPendingInterceptors());
 // `Request` to pass to `worker.fetch()`.
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 
-async function runFetch(url: string) {
-	const request = new IncomingRequest(url);
+async function runFetch(url: string, headers?: HeadersInit) {
+	const request = new IncomingRequest(url, {headers});
 	const ctx = createExecutionContext();
 	const response = await worker.fetch(request, env, ctx);
 	await waitOnExecutionContext(ctx);
@@ -65,6 +65,42 @@ describe('OCI Registry Redirector', () => {
 		expect(response.headers.get('Www-Authenticate')).toBe(
 			'Bearer realm="https://cr.example.com/v2/auth",service="cr.example.com"'
 		);
+	});
+
+	it('issues an unscoped proxy token that authenticates the /v2/ ping', async () => {
+		const tokenResponse = await runFetch('https://cr.example.com/v2/auth?service=cr.example.com');
+		expect(tokenResponse.status).toBe(200);
+		expect(tokenResponse.headers.get('Content-Type')).toBe('application/json');
+		const tokenBody = await tokenResponse.json<{token: string; access: []}>();
+		expect(tokenBody.access).toEqual([]);
+
+		const pingResponse = await runFetch('https://cr.example.com/v2/', {
+			Authorization: `Bearer ${tokenBody.token}`,
+		});
+		expect(pingResponse.status).toBe(200);
+		expect(pingResponse.headers.get('Docker-Distribution-Api-Version')).toBe('registry/2.0');
+	});
+
+	it('does not accept a different token for the /v2/ ping', async () => {
+		const tokenResponse = await runFetch('https://cr.example.com/v2/auth?service=cr.example.com');
+		const {token} = await tokenResponse.json<{token: string}>();
+
+		const response = await runFetch('https://cr.example.com/v2/', {
+			Authorization: `Bearer ${token}-different`,
+		});
+		expect(response.status).toBe(401);
+	});
+
+	it('does not grant repository access with the proxy ping token', async () => {
+		const tokenResponse = await runFetch('https://cr.example.com/v2/auth?service=cr.example.com');
+		const {token} = await tokenResponse.json<{token: string}>();
+		setup401Mock('https://example.org/v2/a/b/manifests/latest');
+
+		const response = await runFetch('https://cr.example.com/v2/image1/manifests/latest', {
+			Authorization: `Bearer ${token}`,
+		});
+		expect(response.status).toBe(401);
+		expect(response.headers.get('Www-Authenticate')).toContain('scope="repository:image1:pull"');
 	});
 
 	it('handles blobs', async () => {
@@ -145,6 +181,14 @@ describe('OCI Registry Redirector', () => {
 			}
 		}
 
+	});
+
+	it('rejects invalid repository scopes', async () => {
+		for (const scope of ['registry:catalog:*', 'repository:image1', 'repository']) {
+			const response = await runFetch(`https://cr.example.com/v2/auth?scope=${encodeURIComponent(scope)}`);
+			expect(response.status).toBe(400);
+			expect(await response.json()).toEqual({error: 'invalid scope'});
+		}
 	});
 
 	it('appends no-transform to an existing Cache-Control header', async () => {
