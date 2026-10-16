@@ -25,6 +25,75 @@
 							"charts/agentgateway": "ghcr.io/agentgateway/charts/agentgateway",
 							"charts/agentgateway-crds": "ghcr.io/agentgateway/charts/agentgateway-crds",
 							"charts/agentgateway-standalone": "ghcr.io/agentgateway/charts/agentgateway-standalone"
+						},
+						// agentgateway v2.x tags predate 1.0; see https://github.com/agentgateway/agentgateway/issues/3457
+						"blockedTags": {
+							// controller: not shipped yet, enable later
+							// "ghcr.io/agentgateway/controller": {
+							// 	"message": "agentgateway v2.x tags are retired (they predate 1.0); use 1.x. See https://github.com/agentgateway/agentgateway/issues/3457",
+							// 	"tags": [
+							// 		"v2.2.0",
+							// 		"v2.2.0-amd64",
+							// 		"v2.2.0-arm64",
+							// 		"v2.2.0-beta.5",
+							// 		"v2.2.0-beta.5-amd64",
+							// 		"v2.2.0-beta.5-arm64",
+							// 		"v2.2.0-beta.6",
+							// 		"v2.2.0-beta.6-amd64",
+							// 		"v2.2.0-beta.6-arm64",
+							// 		"v2.2.0-main",
+							// 		"v2.2.0-main-amd64",
+							// 		"v2.2.0-main-arm64",
+							// 		"v2.2.0-rc.1",
+							// 		"v2.2.0-rc.1-amd64",
+							// 		"v2.2.0-rc.1-arm64",
+							// 		"v2.2.0-rc.2",
+							// 		"v2.2.0-rc.2-amd64",
+							// 		"v2.2.0-rc.2-arm64",
+							// 		"v2.2.1",
+							// 		"v2.2.1-amd64",
+							// 		"v2.2.1-arm64",
+							// 		"v2.3.0-beta.1",
+							// 		"v2.3.0-beta.1-amd64",
+							// 		"v2.3.0-beta.1-arm64",
+							// 		"v2.3.0-main",
+							// 		"v2.2.3"
+							// 	]
+							// },
+							"ghcr.io/agentgateway/charts/agentgateway": {
+								"message": "agentgateway v2.x tags are retired (they predate 1.0); use 1.x. See https://github.com/agentgateway/agentgateway/issues/3457",
+								"tags": [
+									"v2.2.0",
+									"v2.2.0-beta.2",
+									"v2.2.0-beta.3",
+									"v2.2.0-beta.4",
+									"v2.2.0-beta.5",
+									"v2.2.0-beta.6",
+									"v2.2.0-main",
+									"v2.2.0-rc.1",
+									"v2.2.0-rc.2",
+									"v2.2.1",
+									"2.2.1",
+									"v2.3.0-main"
+								]
+							},
+							"ghcr.io/agentgateway/charts/agentgateway-crds": {
+								"message": "agentgateway v2.x tags are retired (they predate 1.0); use 1.x. See https://github.com/agentgateway/agentgateway/issues/3457",
+								"tags": [
+									"v2.2.0",
+									"v2.2.0-beta.2",
+									"v2.2.0-beta.3",
+									"v2.2.0-beta.4",
+									"v2.2.0-beta.5",
+									"v2.2.0-beta.6",
+									"v2.2.0-main",
+									"v2.2.0-rc.1",
+									"v2.2.0-rc.2",
+									"v2.2.1",
+									"2.2.1",
+									"v2.3.0-main"
+								]
+							}
 						}
 					}
 				}
@@ -63,6 +132,12 @@
 							"image1": "example.org/a/b",
 							"image2": "alt.example.org/c",
 							"image3/subimage": "alt.example.org/d/e"
+						},
+						"blockedTags": {
+							"example.org/a/b": {
+								"message": "v2 tags are retired",
+								"tags": ["v2.0.0", "2.0.0"]
+							}
 						}
 					}
 				}
