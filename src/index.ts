@@ -21,6 +21,16 @@ export type RegistryMapping = {
 	mappings: {
 		[repo: string]: string;
 	};
+	// Tags that are hidden from tags/list and refused on manifest requests.
+	// Keyed by the upstream repository (e.g. `ghcr.io/foo/bar`); tags are matched exactly.
+	blockedTags?: {
+		[upstreamRepo: string]: BlockedTags;
+	};
+};
+
+export type BlockedTags = {
+	message: string;
+	tags: string[];
 };
 
 export type TargetRegistries = {
@@ -71,6 +81,24 @@ export function getMapping(config: RegistryMapping, repo: string): MappingResult
 		}
 	}
 
+	return null;
+}
+
+/**
+ * Return the blocked tag configuration for the mapped upstream repository, if any.
+ */
+function getBlockedTags(config: RegistryMapping, mapping: MappingResult): BlockedTags | null {
+	if (mapping === null || !config.blockedTags) {
+		return null;
+	}
+	return config.blockedTags[`${mapping.base}/${mapping.repo}`] ?? null;
+}
+
+function isBlockedTag(config: RegistryMapping, image: string, reference: string): BlockedTags | null {
+	const blocked = getBlockedTags(config, getMapping(config, image));
+	if (blocked !== null && blocked.tags.includes(reference)) {
+		return blocked;
+	}
 	return null;
 }
 
@@ -253,7 +281,8 @@ function trackImagePull(
 	analytics: AnalyticsEngineDataset,
 	imageInfo: { image: string; reference: string | null; type: 'manifest' | 'blob' | 'tags' },
 	request: Request,
-	cf?: IncomingRequestCfProperties
+	cf?: IncomingRequestCfProperties,
+	blocked = false,
 ): void {
 	try {
 		const userAgent = request.headers.get('User-Agent') || 'unknown';
@@ -264,7 +293,8 @@ function trackImagePull(
 		const timestamp = Date.now();
 
 		// Write data point to Analytics Engine
-		// blobs: [image_name, reference/tag/digest, request_type, user_agent, client_ip]
+		// blobs: [image_name, reference/tag/digest, request_type, user_agent, client_ip, region, country, status]
+		// status is 'blocked' when the request was refused by blockedTags, otherwise empty
 		// doubles: [timestamp]
 		// indexes: [image_name, request_type] for efficient querying
 		const data = {
@@ -276,6 +306,7 @@ function trackImagePull(
 				ip,
 				region,
 				country,
+				blocked ? 'blocked' : '',
 			],
 			doubles: [timestamp],
 			indexes: [imageInfo.image],
@@ -290,7 +321,22 @@ function trackImagePull(
 
 
 async function handleManifest(cfg: RegistryMapping, request: Request, path: string, image: string, reference: string) {
+	const blocked = isBlockedTag(cfg, image, reference);
+	if (blocked !== null) {
+		return responseManifestBlocked(request, blocked);
+	}
 	return await handleGeneric(cfg, request, path, image);
+}
+
+function responseManifestBlocked(request: Request, blocked: BlockedTags): Response {
+	const body = JSON.stringify({errors: [{code: 'MANIFEST_UNKNOWN', message: blocked.message}]});
+	return new Response(request.method === 'HEAD' ? null : body, {
+		status: 404,
+		headers: {
+			'Content-Type': 'application/json',
+			'Docker-Distribution-Api-Version': 'registry/2.0',
+		},
+	});
 }
 
 async function handleBlob(cfg: RegistryMapping, request: Request, path: string, image: string, digest: string) {
@@ -350,7 +396,7 @@ function withNoTransform(resp: Response): Response {
 }
 
 async function handleTags(cfg: RegistryMapping, request: Request, path: string, image: string) {
-	const resp = await handleGeneric(cfg, request, path, image);
+	const resp = await filterBlockedTags(cfg, request, image, await handleGeneric(cfg, request, path, image));
 	const link = resp.headers.get('link');
 	if (link) {
 		const mapping = getMapping(cfg, image);
@@ -365,6 +411,25 @@ async function handleTags(cfg: RegistryMapping, request: Request, path: string, 
 	return resp;
 }
 
+/**
+ * Remove blocked tags from a single upstream tags/list page. Pagination (n/last and Link) is left
+ * to upstream, so a page may contain fewer than n tags.
+ */
+async function filterBlockedTags(cfg: RegistryMapping, request: Request, image: string, resp: Response): Promise<Response> {
+	const blocked = getBlockedTags(cfg, getMapping(cfg, image));
+	if (blocked === null || request.method === 'HEAD' || resp.status !== 200) {
+		return resp;
+	}
+	const body = await resp.json<{tags?: string[] | null}>();
+	if (Array.isArray(body.tags)) {
+		const blockedSet = new Set(blocked.tags);
+		body.tags = body.tags.filter(t => !blockedSet.has(t));
+	}
+	const newResponse = new Response(JSON.stringify(body), resp);
+	newResponse.headers.delete('content-length');
+	newResponse.headers.delete('content-encoding');
+	return newResponse;
+}
 
 function handleRoot(request: Request) {
 	// Harbor retries the registry-level ping with the token from /v2/auth.
@@ -468,11 +533,13 @@ export default {
 		if (parsed.type === ImagePathType.Manifest || parsed.type === ImagePathType.Blob) {
 			// Get Cloudflare properties if available
 			const cf = (request as any).cf as IncomingRequestCfProperties | undefined;
+			const blocked = parsed.type === ImagePathType.Manifest
+				&& isBlockedTag(registryConfig, parsed.image, parsed.reference) !== null;
 			trackImagePull(env.IMAGE_PULLS, {
 				image: parsed.image,
 				reference: parsed.type === ImagePathType.Manifest ? parsed.reference : parsed.digest,
 				type: parsed.type,
-			}, request, cf);
+			}, request, cf, blocked);
 		}
 
 		const pathAndQuery = url.pathname + url.search;

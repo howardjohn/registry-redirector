@@ -1,5 +1,5 @@
 import {createExecutionContext, env, fetchMock, waitOnExecutionContext} from 'cloudflare:test';
-import {beforeAll, afterEach, describe, expect, it} from 'vitest';
+import {beforeAll, afterEach, describe, expect, it, vi} from 'vitest';
 import worker, {getMapping} from '../src/index';
 
 beforeAll(() => {
@@ -15,8 +15,8 @@ afterEach(() => fetchMock.assertNoPendingInterceptors());
 // `Request` to pass to `worker.fetch()`.
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 
-async function runFetch(url: string, headers?: HeadersInit) {
-	const request = new IncomingRequest(url, {headers});
+async function runFetch(url: string, headers?: HeadersInit, method = 'GET') {
+	const request = new IncomingRequest(url, {headers, method});
 	const ctx = createExecutionContext();
 	const response = await worker.fetch(request, env, ctx);
 	await waitOnExecutionContext(ctx);
@@ -133,7 +133,7 @@ describe('OCI Registry Redirector', () => {
 	});
 
 	it('handles tags', async () => {
-		setupMock(`https://example.org/v2/a/b/tags/list`);
+		setupTagsMock(`https://example.org/v2/a/b/tags/list`, ['v1.0.0']);
 		const response = await runFetch(`https://cr.example.com/v2/image1/tags/list`);
 		expect(response.headers.get('Cache-Control')).toBe('no-transform');
 		setupMock(`https://alt.example.org/v2/c/bar/tags/list`);
@@ -201,6 +201,106 @@ describe('OCI Registry Redirector', () => {
 		setupMock(`https://example.org/v2/a/b/manifests/latest`, {'Cache-Control': 'No-Transform'});
 		const response = await runFetch(`https://cr.example.com/v2/image1/manifests/latest`);
 		expect(response.headers.get('Cache-Control')).toBe('No-Transform');
+	});
+});
+
+function setupTagsMock(url: string, tags: string[], link?: string) {
+	const parsed = new URL(url);
+	const headers: Record<string, string> = {'Content-Type': 'application/json'};
+	if (link) {
+		headers['Link'] = link;
+	}
+	fetchMock
+		.get(parsed.protocol + '//' + parsed.host)
+		.intercept({path: parsed.pathname + parsed.search})
+		.reply(200, JSON.stringify({name: 'a/b', tags}), {headers});
+}
+
+describe('blocked tags', () => {
+	const blockedBody = {errors: [{code: 'MANIFEST_UNKNOWN', message: 'v2 tags are retired'}]};
+
+	it('returns 404 for blocked manifest tags without contacting upstream', async () => {
+		for (const tag of ['v2.0.0', '2.0.0']) {
+			const response = await runFetch(`https://cr.example.com/v2/image1/manifests/${tag}`);
+			expect(response.status).toBe(404);
+			expect(response.headers.get('Content-Type')).toBe('application/json');
+			expect(await response.json()).toEqual(blockedBody);
+		}
+	});
+
+	it('returns 404 without body for blocked manifest HEAD requests', async () => {
+		const response = await runFetch(`https://cr.example.com/v2/image1/manifests/v2.0.0`, undefined, 'HEAD');
+		expect(response.status).toBe(404);
+		expect(await response.text()).toBe('');
+	});
+
+	it('blocks the upstream repo name alias too', async () => {
+		const response = await runFetch(`https://cr.example.com/v2/a/b/manifests/v2.0.0`);
+		expect(response.status).toBe(404);
+	});
+
+	it('records blocked manifest requests in analytics', async () => {
+		const spy = vi.spyOn(env.IMAGE_PULLS, 'writeDataPoint');
+		await runFetch(`https://cr.example.com/v2/image1/manifests/v2.0.0`);
+		expect(spy.mock.calls[0][0]?.blobs?.[7]).toBe('blocked');
+
+		setupMock(`https://example.org/v2/a/b/manifests/v1.0.0`);
+		await runFetch(`https://cr.example.com/v2/image1/manifests/v1.0.0`);
+		expect(spy.mock.calls[1][0]?.blobs?.[7]).toBe('');
+		spy.mockRestore();
+	});
+
+	it('proxies non-blocked tags, digests, and other repos', async () => {
+		setupMock(`https://example.org/v2/a/b/manifests/v1.0.0`);
+		expect((await runFetch(`https://cr.example.com/v2/image1/manifests/v1.0.0`)).status).toBe(200);
+
+		// Exact match only
+		setupMock(`https://example.org/v2/a/b/manifests/v2.0.0-amd64`);
+		expect((await runFetch(`https://cr.example.com/v2/image1/manifests/v2.0.0-amd64`)).status).toBe(200);
+
+		const digest = 'sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
+		setupMock(`https://example.org/v2/a/b/manifests/${digest}`);
+		expect((await runFetch(`https://cr.example.com/v2/image1/manifests/${digest}`)).status).toBe(200);
+
+		setupMock(`https://alt.example.org/v2/c/bar/manifests/v2.0.0`);
+		expect((await runFetch(`https://cr.example.com/v2/image2/bar/manifests/v2.0.0`)).status).toBe(200);
+	});
+
+	it('filters blocked tags from each upstream page and passes Link through', async () => {
+		setupTagsMock(`https://example.org/v2/a/b/tags/list?n=3`, ['1.0.0', 'v1.0.0', 'v2.0.0'],
+			'</v2/a/b/tags/list?last=v2.0.0&n=3>; rel="next"');
+		const page1 = await runFetch(`https://cr.example.com/v2/image1/tags/list?n=3`);
+		expect(page1.status).toBe(200);
+		expect(page1.headers.get('Cache-Control')).toBe('no-transform');
+		expect(await page1.json()).toEqual({name: 'a/b', tags: ['1.0.0', 'v1.0.0']});
+		expect(page1.headers.get('Link')).toBe('</v2/image1/tags/list?last=v2.0.0&n=3>; rel="next"');
+
+		// A page of only blocked tags is returned empty, with Link still pointing onward
+		setupTagsMock(`https://example.org/v2/a/b/tags/list?last=v2.0.0&n=3`, ['2.0.0', 'v2.0.0'],
+			'</v2/a/b/tags/list?last=v2.0.0&n=3>; rel="next"');
+		const page2 = await runFetch(`https://cr.example.com/v2/image1/tags/list?last=v2.0.0&n=3`);
+		expect(await page2.json()).toEqual({name: 'a/b', tags: []});
+		expect(page2.headers.get('Link')).toBe('</v2/image1/tags/list?last=v2.0.0&n=3>; rel="next"');
+	});
+
+	it('passes HEAD tags requests through', async () => {
+		fetchMock.get('https://example.org').intercept({path: '/v2/a/b/tags/list', method: 'HEAD'}).reply(200, '');
+		const response = await runFetch(`https://cr.example.com/v2/image1/tags/list`, undefined, 'HEAD');
+		expect(response.status).toBe(200);
+	});
+
+	it('returns 401 when upstream requires auth for tags', async () => {
+		setup401Mock(`https://example.org/v2/a/b/tags/list`);
+		const response = await runFetch(`https://cr.example.com/v2/image1/tags/list`);
+		expect(response.status).toBe(401);
+		expect(response.headers.get('Www-Authenticate')).toContain('scope="repository:image1:pull"');
+	});
+
+	it('does not filter tags for other repos', async () => {
+		setupTagsMock(`https://alt.example.org/v2/c/bar/tags/list?n=1`, ['v2.0.0'], '</v2/c/bar/tags/list?last=v2.0.0&n=1>; rel="next"');
+		const response = await runFetch(`https://cr.example.com/v2/image2/bar/tags/list?n=1`);
+		expect(await response.json()).toEqual({name: 'a/b', tags: ['v2.0.0']});
+		expect(response.headers.get('Link')).toBe('</v2/image2/bar/tags/list?last=v2.0.0&n=1>; rel="next"');
 	});
 });
 
