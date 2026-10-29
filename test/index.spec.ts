@@ -358,5 +358,16 @@ describe('getMapping', () => {
 		expect(result?.base).toBe('ghcr.io');
 	});
 
+	it('keeps sibling repos that share a name prefix distinct', () => {
+		const config = {
+			mappings: {
+				'org/charts/app': 'ghcr.io/org/charts/app',
+				'org/charts/app-crds': 'ghcr.io/org/charts/app-crds',
+			}
+		};
+		expect(getMapping(config, 'org/charts/app')).toEqual({base: 'ghcr.io', repo: 'org/charts/app'});
+		expect(getMapping(config, 'org/charts/app-crds')).toEqual({base: 'ghcr.io', repo: 'org/charts/app-crds'});
+		expect(getMapping(config, 'org/charts/other')).toBe(null);
+	});
 
 });

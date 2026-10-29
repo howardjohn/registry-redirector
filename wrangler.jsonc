@@ -95,6 +95,17 @@
 								]
 							}
 						}
+					},
+					// Replaces the Scarf gateway, which redirects to ghcr.io; Helm/ORAS will not authenticate after a cross-origin redirect.
+					"cr.kgateway.dev": {
+						"mappings": {
+							"kgateway-dev/kgateway": "ghcr.io/kgateway-dev/kgateway",
+							"kgateway-dev/envoy-wrapper": "ghcr.io/kgateway-dev/envoy-wrapper",
+							"kgateway-dev/sds": "ghcr.io/kgateway-dev/sds",
+							"kgateway-dev/kgateway-ai-extension": "ghcr.io/kgateway-dev/kgateway-ai-extension",
+							"kgateway-dev/charts/kgateway": "ghcr.io/kgateway-dev/charts/kgateway",
+							"kgateway-dev/charts/kgateway-crds": "ghcr.io/kgateway-dev/charts/kgateway-crds"
+						}
 					}
 				}
 			}
