@@ -99,6 +99,28 @@
 				}
 			}
 		},
+		"kgateway": {
+			"account_id": "0653eeaee9bffe11be6693c01ef6e885",
+			"analytics_engine_datasets": [
+				{
+					"binding": "IMAGE_PULLS",
+					"dataset": "image_pulls"
+				}
+			],
+			"vars": {
+				"TARGET_REGISTRIES": {
+					"cr.kgateway.dev": {
+						"mappings": {
+							"kgateway-dev/kgateway": "ghcr.io/kgateway-dev/kgateway",
+							"kgateway-dev/sds": "ghcr.io/kgateway-dev/sds",
+							"kgateway-dev/envoy-wrapper": "ghcr.io/kgateway-dev/envoy-wrapper",
+							"kgateway-dev/charts/kgateway": "ghcr.io/kgateway-dev/charts/kgateway",
+							"kgateway-dev/charts/kgateway-crds": "ghcr.io/kgateway-dev/charts/kgateway-crds"
+						}
+					}
+				}
+			}
+		},
 		"istio": {
 			"account_id": "1eb8152ceed73d3ee6f66c3557819d4c",
 			"analytics_engine_datasets": [
