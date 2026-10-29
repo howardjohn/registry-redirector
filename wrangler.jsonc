@@ -104,7 +104,7 @@
 			"analytics_engine_datasets": [
 				{
 					"binding": "IMAGE_PULLS",
-					"dataset": "image_pulls"
+					"dataset": "kgateway_image_pulls"
 				}
 			],
 			"vars": {
